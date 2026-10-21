@@ -1,0 +1,6 @@
+# Install the appropriate PyTorch CUDA/CPU wheel first; see README.md.
+torch==2.8.0
+numpy==2.2.6
+scipy==1.16.3
+scikit-learn==1.7.2
+matplotlib==3.10.7
