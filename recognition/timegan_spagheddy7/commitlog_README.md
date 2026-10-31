@@ -1,5 +1,15 @@
 # Development log
 
+## 31 October 2026 - SSIM and comparison setup
+
+Added depth SSIM and updated the AR results notebook. For the TimeGAN comparison, neither model gets validation feature history; both use the same starting prices. AR now starts from sampled training histories.
+
+This setup selected VAR(2), ridge 0.01, with SSIM 0.151 and 93.02% invalid snapshots. It still misses the targets. Kept the earlier observed-history results separately; all 27 previous evaluations reproduced unchanged.
+
+Moved the protocol tests into test_evaluation.py to reduce file clutter. All 25 tests and 15 notebook code cells passed. The saved model also reproduced the three plotted examples.
+
+Next is implementing TimeGAN and running a small GPU trial.
+
 ## 31 October 2026 - AR baseline
 
 Added an autoregressive baseline in PyTorch to compare with TimeGAN later. The model takes previous market updates and generates 32 new updates, using supplied starting prices. The fitted model can be saved and loaded again to generate examples.

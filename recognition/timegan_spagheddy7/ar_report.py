@@ -9,7 +9,7 @@ import numpy as np
 
 def source_fingerprint(project=None):
     project = Path(project or Path(__file__).resolve().parent)
-    names = ("dataset.py", "modules.py", "evaluation.py", "train.py", "tune_ar.py", "ar_report.py")
+    names = ("dataset.py", "modules.py", "evaluation.py", "protocol.py", "train.py", "tune_ar.py", "ar_report.py")
     hashes = {name: hashlib.sha256((project / name).read_text(encoding="utf-8").encode()).hexdigest() for name in names}
     return hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
 
@@ -18,7 +18,7 @@ def load_report(project):
     """Read only: no CSV loading, fitting, generation, or figure rewriting."""
     folder = Path(project) / "reports/ar"
     report = json.loads((folder / "results.json").read_text(encoding="utf-8"))
-    if report.get("format_version") != 2 or report["source_fingerprint"] != source_fingerprint(project):
+    if report.get("format_version") != 3 or report["source_fingerprint"] != source_fingerprint(project):
         raise ValueError("Saved report is from different code. Recompute the grid explicitly before reporting current results.")
     for figure in report.get("figures", {}).values():
         content = (folder / figure["file"]).read_bytes()
@@ -28,14 +28,17 @@ def load_report(project):
 
 
 def example_diagnostics(report, samples):
-    from evaluation import validity_rates
+    from evaluation import DepthSSIM, validity_rates
     rows = []
+    depth = DepthSSIM(samples["real"], report["metric_specification"]["depth_ssim"])
+    scores = {key: depth.score(samples[key])[0] for key in ("real", report["original_candidate"], report["selected_candidate"])}
     for window, raw_index in enumerate(samples["raw_start_indices"]):
         for label, key in (("Real", "real"), ("Original", report["original_candidate"]),
                            ("Selected", report["selected_candidate"])):
             book = samples[key][window:window + 1]
             rows.append({"window": window + 1, "anchor_raw_row": int(raw_index), "model": label,
-                         **validity_rates(book), "minimum_spread_usd": float((book[..., 0] - book[..., 2]).min())})
+                         **validity_rates(book), "minimum_spread_usd": float((book[..., 0] - book[..., 2]).min()),
+                         "depth_ssim": float(scores[key][window])})
     return rows
 
 
@@ -57,12 +60,12 @@ def save_figures(report, samples, folder):
 
     config, candidates = report["config"], report["candidates"]
     by_params = {(r["lags"], r["ridge"]): r for r in candidates}
-    fig, axes = plt.subplots(1, 3, figsize=(12, 3.2), layout="constrained")
+    fig, axes = plt.subplots(1, 4, figsize=(15, 3.2), layout="constrained")
     metrics = [("invalid_rate_mean", "Invalid snapshots (%)", 100), ("mean_kl_mean", "Mean KL", 1),
-               ("abs_return_acf_mae_mean", "Absolute-return ACF error", 1)]
+               ("abs_return_acf_mae_mean", "Absolute-return ACF error", 1), ("depth_ssim_mean", "Depth SSIM (higher is better)", 1)]
     for ax, (metric, title, scale) in zip(axes, metrics):
         values = np.array([[by_params[p, r].get(metric, np.nan) for r in config["ridges"]] for p in config["lags"]]) * scale
-        heat = ax.imshow(values, cmap="YlOrRd", aspect="auto")
+        heat = ax.imshow(values, cmap="YlGn" if metric == "depth_ssim_mean" else "YlOrRd", aspect="auto")
         for (i, j), value in np.ndenumerate(values):
             ax.text(j, i, f"{value:.3f}", ha="center", va="center",
                     bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=1))

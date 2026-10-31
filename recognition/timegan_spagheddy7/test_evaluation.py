@@ -1,4 +1,4 @@
-"""Guard validation alignment, strict validity, tail bins and selection semantics."""
+"""Guard validation metrics, selection and training-only comparison inputs."""
 
 from types import SimpleNamespace
 import unittest
@@ -8,11 +8,58 @@ import torch
 
 from dataset import PRICE_COLUMNS, FeatureScaler
 from evaluation import (absolute_return_acf, conditioning_history, decode_batch, histogram_kl, histogram_probabilities,
-                        market_series, validation_windows, validity_rates)
+                        market_series, validation_windows, validity_rates, DepthSSIM, depth_images, depth_ssim_specification)
 from tune_ar import select_candidate
+from protocol import comparison_protocol, comparison_signature, sample_training_prior
 
 
 class EvaluationChecks(unittest.TestCase):
+    def test_depth_ssim_matches_independent_patch_statistics(self):
+        rng = np.random.default_rng(17)
+        real, generated = rng.uniform(1, 500, (2, 10, 40)), rng.uniform(1, 500, (2, 10, 40))
+        spec = depth_ssim_specification(SimpleNamespace(book=real[0]))
+        x, y = depth_images(real, spec), depth_images(generated, spec)
+        expected = np.empty((2, 2))
+        for batch in range(2):
+            for side in range(2):
+                patches = []
+                for i in range(4):
+                    for j in range(4):
+                        a, b = x[batch, side, i:i + 7, j:j + 7].ravel(), y[batch, side, i:i + 7, j:j + 7].ravel()
+                        covariance = np.cov(a, b, ddof=1)
+                        luminance = (2 * a.mean() * b.mean() + .01 ** 2) / (a.mean() ** 2 + b.mean() ** 2 + .01 ** 2)
+                        structure = (2 * covariance[0, 1] + .03 ** 2) / (covariance.trace() + .03 ** 2)
+                        patches.append(luminance * structure)
+                expected[batch, side] = np.mean(patches)
+        scores, sides = DepthSSIM(real, spec).score(generated)
+        np.testing.assert_allclose(sides, expected, atol=1e-12)
+        np.testing.assert_allclose(scores, expected.mean(axis=1), atol=1e-12)
+
+    def test_depth_identity_prices_and_invalid_volume_are_not_conflated(self):
+        real = np.full((2, 32, 40), 100.)
+        spec = depth_ssim_specification(SimpleNamespace(book=real[0]))
+        evaluator = DepthSSIM(real, spec)
+        invalid = real.copy()
+        invalid[..., 0] = -1  # Price validity is outside this volume-only metric.
+        np.testing.assert_allclose(evaluator.score(invalid)[0], 1, atol=1e-12)
+        invalid[..., 1::2] = -100
+        image = depth_images(invalid, spec)
+        np.testing.assert_allclose(image, -1)
+        self.assertTrue((evaluator.score(invalid)[0] < 0).all())
+        invalid[..., 1::2] = 10000
+        self.assertTrue((depth_images(invalid, spec) > 1).all())
+        self.assertAlmostEqual(spec["training_log_volume_max"], np.log1p(100))
+        np.testing.assert_array_equal(real, 100)
+        with self.assertRaises(ValueError):
+            evaluator.score(invalid[:1])
+
+    def test_depth_ssim_constant_images_have_analytic_luminance_score(self):
+        real, generated = np.full((1, 32, 40), 9.), np.full((1, 32, 40), 99.)
+        spec = depth_ssim_specification(SimpleNamespace(book=generated[0]))
+        # log(10)/log(100) = 0.5, so all variance and covariance terms vanish.
+        expected = (2 * .5 + .01 ** 2) / (.5 ** 2 + 1 + .01 ** 2)
+        np.testing.assert_allclose(DepthSSIM(real, spec).score(generated)[0], expected, atol=1e-12)
+
     def test_batch_decoding_preserves_anchors_returns_and_invalid_volumes(self):
         features = np.zeros((2, 3, 40))
         features[0, :, PRICE_COLUMNS] = np.log(1.1)
@@ -80,6 +127,38 @@ class EvaluationChecks(unittest.TestCase):
         lower_invalid = dict(base, candidate="low_invalid", invalid_rate_mean=0.4, mean_kl_mean=1)
         failed = dict(base, candidate="failed", status="failed", invalid_rate_mean=0, mean_kl_mean=0)
         self.assertEqual(select_candidate([failed, lower_kl, lower_invalid])["candidate"], "low_invalid")
+
+
+class ProtocolChecks(unittest.TestCase):
+    def test_prior_repeats_without_touching_global_rng_or_heldout_data(self):
+        features = np.arange(128 * 40).reshape(128, 40).astype(float)
+        training = SimpleNamespace(raw_offset=0, starts=np.array([0, 32, 64, 96]), features=features)
+        numpy_state, torch_state = np.random.get_state(), torch.get_rng_state()
+        histories, rows = sample_training_prior(training, 30, 4, 42)
+        repeated, same_rows = sample_training_prior(training, 30, 4, 42)
+        torch.testing.assert_close(histories, repeated)
+        np.testing.assert_array_equal(rows, same_rows)
+        for index, row in enumerate(rows):
+            np.testing.assert_array_equal(histories[index], features[row - 4:row])
+            np.testing.assert_array_equal(histories[index, -1:], features[row - 1:row])
+        self.assertTrue(set(rows).issubset({32, 64, 96}))
+        self.assertFalse(np.array_equal(rows, sample_training_prior(training, 30, 4, 43)[1]))
+        np.testing.assert_array_equal(np.random.get_state()[1], numpy_state[1])
+        self.assertEqual(np.random.get_state()[2:], numpy_state[2:])
+        torch.testing.assert_close(torch.get_rng_state(), torch_state)
+        with self.assertRaises(ValueError):
+            sample_training_prior(SimpleNamespace(**{**vars(training), "raw_offset": 128}), 30, 4, 42)
+
+    def test_contract_changes_when_information_or_comparison_changes(self):
+        protocol = comparison_protocol()
+        self.assertEqual(protocol["generator_heldout_inputs"], [])
+        self.assertEqual(protocol["generation_seeds"], [42, 43, 44])
+        args = (protocol, {"ssim": {"data_range": 1}}, [32, 64], [{"sha256": "dataset hash"}], {"minimum": [0]})
+        signature = comparison_signature(*args)
+        self.assertEqual(signature, comparison_signature(*args))
+        self.assertNotEqual(signature, comparison_signature(args[0], args[1], [64, 32], *args[3:]))
+        self.assertNotEqual(signature, comparison_signature({**protocol, "generator_heldout_inputs": ["history"]}, *args[1:]))
+        self.assertNotEqual(signature, comparison_signature(args[0], {"ssim": {"data_range": 2}}, *args[2:]))
 
 
 if __name__ == "__main__":
