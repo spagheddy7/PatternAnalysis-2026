@@ -1,75 +1,59 @@
 # Development log
 
-## 31 October 2026 - autoregressive baseline and validation report
+## 31 October 2026 - AR baseline
 
-Completed:
+Added an autoregressive baseline in PyTorch to compare with TimeGAN later. The model takes previous market updates and generates 32 new updates, using supplied starting prices. The fitted model can be saved and loaded again to generate examples.
 
-- Implemented a PyTorch vector AR(p) baseline with ridge fitting, joint residual sampling, checkpoint saving/reloading and generation of 32-update sequences.
-- Compared p = 1, 2, 4 and ridge = 1e-6, 1e-4, 1e-2 using training-only fits and generation seeds 42, 43 and 44.
-- Evaluated 1,080 common validation windows per seed (34,560 snapshots), using observed past validation features and matching price anchors. No test model scores were used.
-- Selected VAR(4), ridge 1e-6, by lowest mean invalid-book rate, with mean KL and ACF error as tie-breakers. Kept the original VAR(1) comparison.
-- Consolidated the initial smoke test, grid, per-seed scores, structural diagnostics, distributions, temporal behaviour, three fixed example periods, depth heatmaps and runtime evidence into [ar_results.ipynb](ar_results.ipynb).
-- Saved current and historical numeric evidence plus six figures in [reports/ar/](reports/ar/). The notebook loads saved results by default; weights and generated arrays remain ignored under outputs/ar/.
-- Shared one SVD per lag order across ridge values, vectorised sequence decoding, cached real validation statistics and reused the checkpoint schema. Removed the superseded report copies after checking their evidence was preserved.
-- Corrected notebook equation delimiters and separated the model equation from the fitting objective.
+After the initial AR(1), the next step was to see whether tuning improved the results. The grid tested 1, 2 and 4 previous updates, with ridge values of 1e-6, 1e-4 and 1e-2. Each combination used three generation seeds (42, 43 and 44) and the same 1,080 validation windows. Fitting used the training period only.
 
-Validation results (means over three generation seeds; lower is better):
+VAR(4) with ridge 1e-6 was selected because it had the lowest rate of invalid orderbooks. The results below are averages across the three seeds.
 
-| Measure | Original VAR(1), ridge 1e-4 | Selected VAR(4), ridge 1e-6 |
+| Measure | Original VAR(1) | Tuned VAR(4) |
 | --- | ---: | ---: |
 | Invalid snapshots | 92.924% | 91.380% |
 | Spread KL | 0.1510 | 0.1323 |
 | Mid-price return KL | 0.6058 | 0.5913 |
 | Absolute-return ACF error, lags 1-10 | 0.01881 | 0.02597 |
 
-Interpretation: tuning modestly improves validity and distribution similarity, but worsens the temporal score. More than 91% of generated snapshots violate at least one constraint across the ten levels. The AR model remains a benchmark rather than an adequate simulator. KL values depend on the declared training-only bins and smoothing; seed standard deviations measure generation randomness, not confidence across trading days.
+The improvement was small. More than 91% of the tuned model's snapshots still broke at least one orderbook condition, mainly the ordering of prices across levels. Both KL scores improved slightly, but the autocorrelation error got worse. These results give a baseline for comparison, although the generated books are not reliable enough for market simulation. No test-set model results were used to choose the settings.
 
-Verification:
+All the AR results were put into [ar_results.ipynb](ar_results.ipynb), including the initial checks, tuning grid, plots, three example periods and interpretation. The supporting results and figures are in [reports/ar/](reports/ar/). The notebook now loads the saved results instead of rerunning training each time. Model files and generated arrays stay out of Git.
 
-- All 20 regression checks passed, including synthetic VAR recovery, lag ordering, checkpoint/RNG behaviour, chronological data handling, batch decoding, histogram tails and strict order-book validity.
-- All 12 report notebook code cells executed without errors. Displayed figures were inspected; Markdown changes preserved code and outputs.
-- The notebook also executed from a report-only copy without raw CSVs, checkpoints or ignored preview arrays, without modifying the saved report bundle.
-- The original saved AR(1) checkpoint reproduced its features and decoded books exactly using the recorded seeds and four CPU threads.
-- Before/after comparison of all 27 validation evaluations retained the same selected configuration and identical validity/KL scores. The largest ACF-score difference was approximately 1.32e-14.
-- Across three runs per implementation on the same CPU, median grid runtime fell from 11.563 s to 7.794 s (32.6% faster); fitting work fell from 5.077 s to 2.435 s. Timings include data loading/saving but exclude plotting and interpreter startup.
+The code was also cleaned up to avoid repeating the same matrix decomposition for each ridge value, decode sequences together and reuse the real validation statistics. Over three runs per version, median grid time fell from 11.56 to 7.79 seconds, about 33% faster. This includes loading and saving, but excludes plotting and Python startup. The selected model and validity/KL scores stayed the same; changes in ACF error were below 1.4e-14.
 
-Limits: validation was used for model selection; final test evaluation remains pending. The full-day preprocessing audit reads test data, but no test model scores were computed. Depth SSIM, TimeGAN training, a fair cross-model conditioning protocol and GPU training-resource measurements remain to be completed.
+Checks completed:
 
-Next milestones:
+- All 20 tests passed, covering the model, data handling and evaluation functions.
+- All 12 notebook code cells ran without errors. The plots and equation formatting were checked.
+- The notebook ran from the saved report files without the dataset or model weights.
+- The original saved AR(1) model reproduced the same generated features and decoded books with the recorded seeds and four CPU threads.
 
-1. Finalise the shared comparison protocol and depth-SSIM definition; confirm the feasibility tutor check-off.
-2. Implement TimeGAN's five networks and staged training, with a small GPU pilot, checkpoint reload checks and resource measurements.
-3. Run repeated-seed training and validation comparisons; use a targeted temporal-loss ablation to investigate the research question.
-4. Freeze model choices, evaluate the held-out test period and analyse 3-5 representative failures.
-5. Complete the final README, feasibility section, references/disclosure, reproducibility checks and PDF; submit the course pull request and Turnitin report, then respond to the later code review.
+Depth SSIM and GPU training memory have not been measured yet. The full-day data audit reads the test period, but final model testing is still pending. Seed variation here does not show how the model would perform on other trading days.
 
-## 26 October 2026 - data checks and feasibility preparation
+Next steps:
 
-Completed:
-- Added an executed notebook explaining and reproducing the preliminary data checks.
-- Checked all 269,748 aligned rows in the AMZN message and Level-10 order-book files. The message file has 6 columns; the order-book file has 40.
-- Confirmed the file hashes match the saved audit and found no violations in the implemented data-integrity checks.
-- Documented chronological splits by elapsed session time (70/15/15), training-only scaling, and sequences of 32 market updates.
-- Confirmed 5,507 training, 1,081 validation and 1,839 test sequences.
-- Saved a training-data plot and the notebook dependency list.
-- Separated the report-writing template into feasibility_README.md and removed the earlier SETUP_NOTES.md.
+1. Finish the SSIM measure and decide what starting information each model gets for a fair comparison. Confirm the tutor feasibility check-off.
+2. Implement TimeGAN and run a small GPU trial to check training, memory use and saved-model generation.
+3. Train with several seeds and compare against AR. Test the effect of removing the temporal supervision loss.
+4. Once the settings are fixed, evaluate the test period and discuss 3-5 example failures.
+5. Finish the README, feasibility section, references and disclosure, then submit the PDF and course pull request. Respond to the teaching team's review when it arrives.
 
-Verification recorded in data_checks.ipynb:
-- All 9 code cells executed without errors.
-- All 5 dataset regression tests passed, covering split boundaries, scaling, inverse transformation and invalid input rejection.
-- A finite batch of shape (64, 32, 40) transferred to the RTX 4060 successfully.
+## 26 October 2026 - data checks
 
-Limits: this verifies the data pipeline and a GPU batch transfer. Neither TimeGAN nor the autoregressive baseline has been trained. The input batch uses 0.3125 MiB; this is not peak training memory. The feasibility review remains a writing template and has not been checked off.
+Added [data_checks.ipynb](data_checks.ipynb) to record the preliminary checks for the feasibility review. The two CSVs contained 269,748 matching rows, with 6 columns in the message file and 40 in the orderbook file. The file hashes matched the saved audit, and the checks found no missing levels, non-positive spreads, incorrectly ordered prices or negative quantities.
 
-Next: Implement the autoregressive baseline, then run a small TimeGAN training pilot and measure training memory and runtime.
+The data was split 70/15/15 by elapsed trading time, with scaling fitted on training data only. Using 32 updates per sequence gave 5,507 training, 1,081 validation and 1,839 test sequences. A training-data plot and the notebook requirements were saved. The writing template was moved to feasibility_README.md and SETUP_NOTES.md was removed.
 
-## Existing Git milestones
+All 9 notebook code cells and 5 dataset tests passed. A batch of shape (64, 32, 40) transferred to the RTX 4060 successfully. This checked data loading and GPU compatibility; it did not measure training memory. The batch itself used 0.3125 MiB.
 
-| Commit | Recorded change |
+At this stage, neither model had been trained and the feasibility review was still a template awaiting tutor check-off. The next step was to fit and generate with the AR baseline.
+
+## Git commits
+
+| Commit | Work recorded |
 | --- | --- |
-| 6fbd4c9 | Initial project snapshot with data pipeline and feasibility checks; lecturer course history retained. |
-
-The 31 October entry accompanies the commit titled `Add autoregressive baseline and validation report`. Subsequent milestones will be recorded as they are completed.
+| 6fbd4c9 | Data pipeline and initial feasibility checks. |
+| 4f9a67f | AR baseline, validation tuning and results notebook. |
 
 ## Artificial Intelligence Usage Disclosure
 
