@@ -1,24 +1,52 @@
 # TimeGAN for AMZN Limit Order Book Simulation
 
-COMP3710 Section 2.7 project in progress. The data pipeline and preliminary checks are available; model implementation and training are still pending.
+COMP3710 Section 2.7. The autoregressive baseline is implemented and evaluated on validation data. TimeGAN and final test evaluation are pending.
 
-- [Feasibility review and report draft](feasibility_README.md): the writing template.
-- [Data checks notebook](data_checks.ipynb): executed checks, explanations and plots.
-- [Development log](commitlog_README.md): completed work, verification and next steps.
-- [Saved data audit](reports/data_audit.json): measured preprocessing results.
+Start with [ar_results.ipynb](ar_results.ipynb) for the complete AR baseline report: initial fit, tuning, structural validity, distributions, temporal behaviour, fixed examples, runtime and conclusions. All displayed results are saved; opening or rerunning the notebook does not train models by default.
 
-The data contains one AMZN trading session, 21 June 2012. Chronological preprocessing produces 5,507 training, 1,081 validation and 1,839 test sequences, each containing 32 updates and 40 features. These are data checks, not evidence of model performance.
+The selected VAR(4), ridge 1e-6, reduces invalid validation snapshots from 92.92% to 91.38%. Both KL scores improve slightly, but temporal error worsens. This is a useful benchmark, not an adequate order-book simulator. The report distinguishes these validation results from the earlier training-context smoke test.
 
-## Run the data checks
+## Project documents
 
-From the repository root, with the project Python environment active:
+- [AR baseline report](ar_results.ipynb): the main results notebook.
+- [Data checks](data_checks.ipynb): data feasibility evidence.
+- [Feasibility and report draft](feasibility_README.md): the student's writing.
+- [Development log](commitlog_README.md): recorded work and verification.
+
+## Reproduce the results
+
+Use the project Python environment. Dependencies are in requirements.txt; notebook extras are in requirements-notebook.txt. From the repository root:
 
 ```powershell
-python recognition/timegan_spagheddy7/dataset.py --data-dir "../LOBSTER_SampleFile_AMZN_2012-06-21_10" --require-cuda
+python recognition/timegan_spagheddy7/tune_ar.py --data-dir "../LOBSTER_SampleFile_AMZN_2012-06-21_10"
 python -m unittest discover -s recognition/timegan_spagheddy7 -p "test_*.py" -v
 ```
 
-Use the same environment as the notebook kernel. Core dependency versions are listed in requirements.txt; notebook extras are in requirements-notebook.txt. The downloaded CSV files remain outside the repository.
+The first command recomputes the nine-configuration, three-seed validation grid and its figures. Then rerun the notebook to refresh its displayed outputs. Alternatively, set `RECOMPUTE_GRID = True` in the notebook. The historical initial smoke-test measurements remain labelled separately. The default notebook view needs neither raw CSVs nor checkpoints.
+
+For standalone fitting and generation:
+
+```powershell
+python recognition/timegan_spagheddy7/train.py --data-dir "../LOBSTER_SampleFile_AMZN_2012-06-21_10" --lags 1
+python recognition/timegan_spagheddy7/predict.py --num-sequences 64 --seed 42
+```
+
+These write local scratch results under `outputs/ar/`. They do not overwrite the published report. Generation samples training histories and produces 32 new updates after each supplied anchor.
+
+## File responsibilities
+
+| File or folder | Purpose |
+| --- | --- |
+| `dataset.py` | Full-day checks, chronological splits, training-only scaling and batch decoding |
+| `modules.py` | PyTorch VAR model; shares one SVD across ridge values of the same order |
+| `train.py` / `predict.py` | Standalone fit and reload/generate commands; shared checkpoint schema |
+| `evaluation.py` | Strict book validity, KL and within-window ACF; cached real reference statistics |
+| `tune_ar.py` | Training-only fitting, common validation contexts and explicit model selection |
+| `ar_report.py` | Report loading, provenance checks and plots |
+| `reports/ar/` | One report bundle: results.json and report figures, including historical measurements |
+| `outputs/ar/` | Ignored checkpoints and generated arrays; selected model under `tuning/` |
+
+The CSVs remain outside Git. No book repairs are applied. The full-day data audit reads test data, but test model scores are not computed or used for tuning. Depth SSIM, the TimeGAN comparison and final held-out evaluation remain pending.
 
 ## Artificial Intelligence Usage Disclosure
 

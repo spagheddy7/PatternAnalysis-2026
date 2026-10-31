@@ -139,18 +139,21 @@ class FeatureScaler:
 
 
 def decode_features(features, scaler, initial_prices):
-    """Invert one sequence to prices in USD and volumes in shares.
+    """Invert (..., updates, features) sequences to USD prices and share volumes.
 
     Initial prices are conditioning information, not generated values. No
     clipping, reordering, or nonnegativity repair is applied, so subsequent
     model evaluation can detect invalid generated books honestly.
     """
     restored = scaler.inverse_transform(features)
+    anchors = np.asarray(initial_prices, dtype=np.float64)
+    if restored.ndim not in (2, 3) or restored.shape[-1] != 40:
+        raise ValueError("Expected (updates, 40) or (batch, updates, 40) features.")
+    if anchors.shape != (*restored.shape[:-2], 20):
+        raise ValueError("Supply one 20-price anchor per sequence.")
     book = np.empty_like(restored)
-    book[:, PRICE_COLUMNS] = np.asarray(initial_prices) * np.exp(
-        np.cumsum(restored[:, PRICE_COLUMNS], axis=0)
-    )
-    book[:, VOLUME_COLUMNS] = np.expm1(restored[:, VOLUME_COLUMNS])
+    book[..., PRICE_COLUMNS] = anchors[..., None, :] * np.exp(np.cumsum(restored[..., PRICE_COLUMNS], axis=-2))
+    book[..., VOLUME_COLUMNS] = np.expm1(restored[..., VOLUME_COLUMNS])
     return book
 
 
